@@ -1,14 +1,15 @@
 import warnings
-
+import os.path
 import mongoengine as me
 import datetime
 import functools
+from dataclasses import dataclass
 import oauth2creds
 from googleapiclient.discovery import build
 import logging
 from logging.config import dictConfig
 
-from models import Gphoto, Gphoto_state
+from me_models import Gphoto, Gphoto_state
 from utils import Config
 
 FOLDER = "application/vnd.google-apps.folder"
@@ -33,6 +34,7 @@ class GphotoSync:
     def __init__(self):
         dictConfig(cfg.logging)
         self.log = logging.getLogger(__name__)
+        self.root = None
 
     def sync(self):
         if self.database_clean() and self.start_token() is not None:
@@ -46,24 +48,29 @@ class GphotoSync:
         start_time = datetime.datetime.now()
         self.database_clean(set_state=False)
         Gphoto.drop_collection()
-        root_id = service.files().get(fileId="root").execute().get("id")
-        assert root_id is not None, "No root ID found for Google Drive"
-        # for root_folder_name in (["My Laptop", "Google Photos", "BSJ Work Laptop"]): # TODO: Can't discover computer folders. Only addressing Google Photos for now
-        for root_folder_name in ["Google Photos"]:
-            query = f"parents in '{root_id}' and trashed = false and name = '{root_folder_name}'"
-            node_dict = self.steralize(
-                service.files()
-                .list(q=query, fields=INIT_FIELDS)
-                .execute()
-                .get("files")[0]
-            )
-            root = Gphoto(**node_dict)
-            root.save()
-            self.walk(folder=root)
+        self.get_root()
+        self.walk(folder=self.root)
         self.database_clean(set_state=True)
         self.log.info(
             f"Full resync elapsed time: {datetime.datetime.now() - start_time}"
         )
+
+    def get_root(self):
+        root_id = service.files().get(fileId="root").execute().get("id")
+        assert root_id is not None, "No root ID found for Google Drive"
+        node_dict = self.steralize(
+            service.files()
+            .list(
+                q=f"parents in '{root_id}' and trashed = false and name = 'google photos'",
+                fields=INIT_FIELDS,
+            )
+            .execute()
+            .get("files")[0]
+        )
+        root = Gphoto(**node_dict)
+        Gphoto.objects(gid=root.gid).update(upsert=True, **node_dict)
+        self.root = root
+        return
 
     def walk(self, folder, path=None):
         path = path or []
@@ -77,9 +84,7 @@ class GphotoSync:
                 folders.append(node)
             db_nodes.append(node)
         if db_nodes:
-            Gphoto.objects.insert(
-                db_nodes
-            )  # TODO: This should be an update not an append - may need to review to update_many from pymongo
+            Gphoto.objects.insert(db_nodes)
         for folder in folders:
             self.walk(folder, path)
         path.pop()
@@ -128,7 +133,7 @@ class GphotoSync:
                 return None
             return start_token
 
-    def get_changes(self, change_token):
+    def get_changes(self):
         """
         Google API for changes().list() returns:
         {
@@ -149,11 +154,12 @@ class GphotoSync:
             "removed": boolean,
             "fileId": string,
             "file": files Resource,
-        "teamDriveId": string,
-        "teamDrive": teamdrives Resource
+            "teamDriveId": string,
+            "teamDrive": teamdrives Resource
         }
 
         """
+        change_token = Gphoto_state.objects().get()["start_token"]
         changes = []
         while True:
             response = (
@@ -175,13 +181,51 @@ class GphotoSync:
                 break
         return changes
 
+    @dataclass
+    class DriveChange:
+        removed: bool
+        fileId: str
+        file: dict
+        gphoto = None
+        kind: str = None
+        type: str = None
+        time: datetime = None
+        teamDriveId: str = None
+        teamDrive: str = None
+        #
+        # def __post_init__(self):
+        #     self.gphoto = Gphoto(**self.file)
+
+    def validate_drive_changes(self, drive_changes):
+        valid_changes = []
+        for change in drive_changes:
+            drive_change = self.DriveChange(**change)
+            drive_change.gphoto = Gphoto(**self.steralize(drive_change.file))
+            if not (
+                "image/" in drive_change.gphoto.mimeType
+                or "video/" in drive_change.gphoto.mimeType
+                or drive_change.gphoto.mimeType == "application/vnd.google-apps.folder"
+            ):
+                continue
+            if (
+                not os.path.splitext(drive_change.gphoto.name)[1]
+                in cfg.local.image_filetypes
+            ):
+                continue
+            drive_change.gphoto.path = self.get_node_path(drive_change.gphoto)
+            valid_changes.append(drive_change)
+        return valid_changes
+
     def update_db(self):
+        drive_changes = self.get_changes()
+        photo_changes = self.validate_drive_changes(drive_changes)
+        if not photo_changes:
+            self.log.info("No changes to photos detected")
+            return
         delete_count = new_count = 0
         self.database_clean(set_state=False)
-        change_token = Gphoto_state.objects().get()
-        changes = self.get_changes(change_token['start_token'])
-        for change in changes or []: # TODO: This should only work for files under Google Photos
-            if change["removed"] or change["file"]["trashed"]: # TODO: Check if it's a relevant filetype (image)
+        for change in photo_changes:
+            if change["removed"] or change["file"]["trashed"]:
                 try:
                     Gphoto.objects(gid=change["fileId"]).get()
                 except me.errors.DoesNotExist:
@@ -236,7 +280,8 @@ class GphotoSync:
 
     @functools.lru_cache()
     def get_node_path(self, node):
-        if len(node.parents) < 1:
+        assert len(node.parents) > 0, "Got node with no parents"
+        if node.parents[0] == self.root.gid:
             return []
         try:
             parent = Gphoto.objects(gid=node.parents[0]).get()
@@ -272,19 +317,6 @@ class GphotoSync:
         )  # TODO: Make sure search for not deleted nodes (right below root??)
         return Gphoto(**self.steralize(node_json))
 
-    # def ascend(self, node):
-    #     parent = Gphoto.objects(id=node.parents[0])
-    #     # assert parent.count() == 1, "Ascend: More than one file with same id returned"
-    #     if parent is None:
-    #         pass
-    #         # TODO:  Hmmmm....maybe parent isn't yet in database. Need to scan rest of changes for the parent.
-    #     if parent.id == self.root['id']:
-    #         return ['Google Photos']
-    #     path = parent.path
-    #     if path is None:
-    #         path.append(self.ascend(parent))
-    #     return path.append(parent.name)
-
     def steralize(self, node):
         if "id" in node:  # Mongoengine reserves 'id'
             node["gid"] = node.pop("id")
@@ -293,26 +325,6 @@ class GphotoSync:
         if "kind" in node:
             del node["kind"]
         return node
-
-    # class DatabaseClean:
-    #     def __get_clean_state(self):
-    #         try:
-    #             db_clean = Gphoto_state.objects().get().database_clean
-    #         except me.MultipleObjectsReturned:
-    #             raise me.MultipleObjectsReturned('State database has more than one record - should never happen.')
-    #         except me.DoesNotExist:
-    #             db_clean = False
-    #             self.clean(False)
-    #         return db_clean
-    #
-    #     @property
-    #     def clean(self):
-    #         return self.__get_clean_state()
-    #
-    #     @clean.setter
-    #     def clean(self, state):
-    #         assert isinstance(state, bool), "State must be boolean."
-    #         Gphoto_state.objects().update_one(upsert=True, database_clean=state)
 
     def database_clean(self, set_state=None):
         if set_state is None:
