@@ -10,7 +10,7 @@ class Db_connect():
 
 
 class Gphoto(me.Document):  # TODO: Remove strict: false from metadata once db is clean
-    gid = me.StringField()
+    gid = me.StringField(unique=True)
     imageMediaMetadata = me.DictField()
     md5Checksum = me.StringField()
     mimeType = me.StringField()
@@ -20,6 +20,7 @@ class Gphoto(me.Document):  # TODO: Remove strict: false from metadata once db i
     parents = me.ListField()
     gsize = me.IntField()
     trashed = me.BooleanField()
+    path = me.ListField()
     meta = {
         'db_alias': cfg.gphotos.collection,
         'indexes': ['gid', 'md5Checksum'],
@@ -33,7 +34,7 @@ class Gphoto_state(me.Document):
     meta = {'db_alias': cfg.gphotos.collection}
 
 
-class Gphoto_parent(me.Document):
+class Gphoto_parent(me.Document): # Depricated?
     gid = me.StringField()
     mimeType = me.StringField()
     name = me.StringField()

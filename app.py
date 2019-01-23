@@ -9,7 +9,7 @@ from logging.config import dictConfig
 
 import mongoengine as me
 
-from models import Db_connect, Queue, State, Gphoto, Gphoto_parent
+from me_models import Db_connect, Queue, State, Gphoto, Gphoto_parent
 from utils import file_md5sum, Config
 
 cfg = Config()

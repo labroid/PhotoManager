@@ -34,7 +34,7 @@ class GphotoSync:
     def __init__(self):
         dictConfig(cfg.logging)
         self.log = logging.getLogger(__name__)
-        self.root = None
+        self.root = self.get_root()
 
     def sync(self):
         if self.database_clean() and self.start_token() is not None:
@@ -42,13 +42,13 @@ class GphotoSync:
         else:
             self.log.info("Database dirty: Rebulding")
             self.rebuild_db()
+            pass
         self.start_token(update=True)
 
     def rebuild_db(self):
         start_time = datetime.datetime.now()
         self.database_clean(set_state=False)
         Gphoto.drop_collection()
-        self.get_root()
         self.walk(folder=self.root)
         self.database_clean(set_state=True)
         self.log.info(
@@ -69,8 +69,7 @@ class GphotoSync:
         )
         root = Gphoto(**node_dict)
         Gphoto.objects(gid=root.gid).update(upsert=True, **node_dict)
-        self.root = root
-        return
+        return root
 
     def walk(self, folder, path=None):
         path = path or []
@@ -133,7 +132,7 @@ class GphotoSync:
                 return None
             return start_token
 
-    def get_changes(self):
+    def get_drive_changes(self):
         """
         Google API for changes().list() returns:
         {
@@ -192,23 +191,19 @@ class GphotoSync:
         time: datetime = None
         teamDriveId: str = None
         teamDrive: str = None
-        #
-        # def __post_init__(self):
-        #     self.gphoto = Gphoto(**self.file)
 
     def validate_drive_changes(self, drive_changes):
         valid_changes = []
         for change in drive_changes:
             drive_change = self.DriveChange(**change)
             drive_change.gphoto = Gphoto(**self.steralize(drive_change.file))
-            if not (
-                "image/" in drive_change.gphoto.mimeType
-                or "video/" in drive_change.gphoto.mimeType
-                or drive_change.gphoto.mimeType == "application/vnd.google-apps.folder"
+            drive_change.removed = drive_change.removed or drive_change.gphoto.trashed
+            if not any(
+                [mimeType in drive_change.gphoto.mimeType for mimeType in MIME_FILTER]
             ):
                 continue
-            if (
-                not os.path.splitext(drive_change.gphoto.name)[1]
+            if not (
+                os.path.splitext(drive_change.gphoto.name)[1]
                 in cfg.local.image_filetypes
             ):
                 continue
@@ -217,66 +212,45 @@ class GphotoSync:
         return valid_changes
 
     def update_db(self):
-        drive_changes = self.get_changes()
+        drive_changes = self.get_drive_changes()
         photo_changes = self.validate_drive_changes(drive_changes)
         if not photo_changes:
             self.log.info("No changes to photos detected")
             return
         delete_count = new_count = 0
         self.database_clean(set_state=False)
+        # for change in [x for x in photo_changes if x.removed]: # This probably works
         for change in photo_changes:
-            if change["removed"] or change["file"]["trashed"]:
-                try:
-                    Gphoto.objects(gid=change["fileId"]).get()
-                except me.errors.DoesNotExist:
-                    self.log.info(
-                        f"Record for removed file ID {change['fileId']} not in database. Moving on..."
-                    )
-                    continue
-                except me.errors.MultipleObjectsReturned:
-                    self.log.info(
-                        f"Record for removed file ID {change['fileId']} returned multiple hits in database. Consider rebuilding database."
-                    )
-                    raise me.errors.MultipleObjectsReturned(
-                        "Multiple records with ID {change['fileId']} in database. Consider rebuilding database."
-                    )
+            if change.removed:
+                change.gphoto.delete()
                 self.log.info(
-                    f"Removing record for file ID {change['fileId']} from database."
+                    f"Removing record for file ID {change.fileId} from database if it exists."
                 )
-                Gphoto.objects(gid=change["fileId"]).delete()
                 delete_count += 1
                 continue
-            if not any(
-                mimeType in change["file"]["mimeType"] for mimeType in MIME_FILTER
-            ):
-                self.log.info(
-                    f"Skipping {change['file']['name']} of mimeType {change['file']['mimeType']}'"
-                )
-                continue
-            self.log.info(f"Updating record {change['file']['name']}")
-            change["file"] = self.steralize(change["file"])
-            if not change["file"].get("parents", None):
-                warn_str = f"Parents list empty for ID {change['file']['gid']} - something is strange."
-                self.log.info(warn_str)
-                warnings.warn(warn_str)
-            Gphoto.objects(gid=change["file"]["gid"]).update_one(
-                upsert=True, **change["file"]
-            )
-            new_count += 1
-        self.set_paths()
-        # self.purge_nodes_outside_roots()
+            else:
+                # for change in [x for x in photo_changes if not x.removed]:
+                try:
+                    Gphoto.objects(gid=change.gphoto.gid).get()
+                except me.DoesNotExist:
+                    self.log.info(f"Updating record {change.gphoto.name}")
+                    change.gphoto.save(force_insert=False)
+                    new_count += 1
+                    continue
+                else:
+                    self.log.info(f"Update skipped; Google ID already in database")
         self.database_clean(set_state=True)
         self.log.info(
             f"Sync update complete. New file count: {new_count} Deleted file count: {delete_count}"
         )
 
-    def set_paths(self):
-        orphans = Gphoto.objects(path=[])
-        print(f"Number of orphans: {orphans.count()}")
-        for orphan in orphans:
-            path = self.get_node_path(orphan)
-            Gphoto.objects(gid=orphan.gid).update_one(upsert=True, path=path)
-        self.log.info(f"Cache stats: {self.get_node_path.cache_info()}")
+    # def set_paths(self):
+    #     orphans = Gphoto.objects(path=[])
+    #     print(f"Number of orphans: {orphans.count()}")
+    #     for orphan in orphans:
+    #         path = self.get_node_path(orphan)
+    #         Gphoto.objects(gid=orphan.gid).update_one(upsert=True, path=path)
+    #     self.log.info(f"Cache stats: {self.get_node_path.cache_info()}")
 
     @functools.lru_cache()
     def get_node_path(self, node):
