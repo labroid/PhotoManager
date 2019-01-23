@@ -1,4 +1,3 @@
-import warnings
 import os.path
 import mongoengine as me
 import datetime
@@ -244,14 +243,6 @@ class GphotoSync:
             f"Sync update complete. New file count: {new_count} Deleted file count: {delete_count}"
         )
 
-    # def set_paths(self):
-    #     orphans = Gphoto.objects(path=[])
-    #     print(f"Number of orphans: {orphans.count()}")
-    #     for orphan in orphans:
-    #         path = self.get_node_path(orphan)
-    #         Gphoto.objects(gid=orphan.gid).update_one(upsert=True, path=path)
-    #     self.log.info(f"Cache stats: {self.get_node_path.cache_info()}")
-
     @functools.lru_cache()
     def get_node_path(self, node):
         assert len(node.parents) > 0, "Got node with no parents"
@@ -271,25 +262,6 @@ class GphotoSync:
             return parent.path + [parent.name]
         else:
             return self.get_node_path(parent) + [parent.name]
-
-    # def list_roots(self, names=None):
-    #     root_id = service.files().get(fileId='root').execute().get('id')
-    #     assert root_id != None, 'No root ID found for Google Drive'
-    #     # query = f"parents in '{root_id}' and trashed = false and ( name = '" + "' or name = '".join(names) + "')"
-    #     # nodes_json = service.files().list(q=query, fields=INIT_FIELDS).execute()
-    #     # sterile_nodes = [self.steralize(x) for x in nodes_json['files']]
-    #     for name in names:
-    #         query = f"parents in '{root_id}' and trashed = false and name = '{name}'"
-    #         node_json = self.steralize(service.files().list(q=query, fields=INIT_FIELDS).execute())
-    #
-    #     return Gphoto(**node_json)
-
-    def get_node(self, id):
-        # TODO: Looks like it needs to be the file name ('My Laptop') without parents
-        node_json = (
-            service.files().get(fileId=id, fields=FILE_FIELDS).execute()
-        )  # TODO: Make sure search for not deleted nodes (right below root??)
-        return Gphoto(**self.steralize(node_json))
 
     def steralize(self, node):
         if "id" in node:  # Mongoengine reserves 'id'
