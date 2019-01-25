@@ -1,9 +1,8 @@
 import hashlib
-import collections
 import logging
 import yaml
 import os
-import mongoengine
+from dataclasses import dataclass
 
 
 def file_md5sum(path):
@@ -11,7 +10,7 @@ def file_md5sum(path):
 
     md5 = hashlib.md5()
     try:
-        f = open(path, 'rb')
+        f = open(path, "rb")
     except IOError:
         logging.error("Can't open path {}".format(path))
     else:
@@ -35,20 +34,62 @@ def stat_node(nodepath):
     return file_stat
 
 
-def cfg_obj(config, key):
-    Obj_cls = collections.namedtuple('Obj_cls', config[key].keys())
-    return Obj_cls(**config[key])
+# def cfg_obj(config, key):
+#     Obj_cls = collections.namedtuple('Obj_cls', config[key].keys())
+#     return Obj_cls(**config[key])
 
 
-def get_cfg():
+def get_yaml():
     with open("config.yaml") as f:
-        config = yaml.safe_load(f.read())
-    return config
+        config_dict = yaml.safe_load(f.read())
+    return config_dict
 
 
-class Config():
-    def __init__(self):
-        self.__cfg = get_cfg()
-        self.local = cfg_obj(self.__cfg, 'local')
-        self.gphotos = cfg_obj(self.__cfg, 'gphotos')
-        self.logging = self.__cfg['logging']
+# class Config():
+#     def __init__(self):
+#         self.__cfg = get_cfg()
+#         self.local = cfg_obj(self.__cfg, 'local')
+#         self.gphotos = cfg_obj(self.__cfg, 'gphotos')
+#         self.logging = self.__cfg['logging']
+
+
+@dataclass
+class Settings:
+    purge_ok: bool = False
+    mirror_ok: bool = False
+
+
+@dataclass
+class Local:
+    gphoto_upload_queue: str
+    mirror_root: str
+    image_filetypes: list
+    log_file_base: str
+    mongod_path: str
+    database: str
+
+
+@dataclass
+class Gphotos:
+    host: str
+    database: str
+    collection: str
+    gphoto_db_alias: str
+
+
+@dataclass
+class Cfg:
+    settings: Settings
+    local: Local
+    gphotos: Gphotos
+
+
+def config():
+    with open("config.yaml") as f:
+        config_dict = yaml.safe_load(f.read())
+    cfg = Cfg(
+        settings=Settings(**config_dict["settings"]),
+        local=Local(**config_dict["local"]),
+        gphotos=Gphotos(**config_dict["gphotos"]),
+    )
+    return cfg
