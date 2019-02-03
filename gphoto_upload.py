@@ -1,14 +1,14 @@
-from loguru import logger
 import utils
 import requests
 import json
 import os.path
 from oauth2creds import get_credentials
+from loguru import logger
 
 cfg = utils.config()
 logger.add("gphoto_upload.log", rotation="1 MB")
 
-# TODO: This should be a little more mature: check return codes from the insert and make sure all photos made it up
+
 def upload_to_gphotos(filepath, filename=None):
     if filename is None:
         filename = os.path.basename(filepath)
@@ -17,19 +17,9 @@ def upload_to_gphotos(filepath, filename=None):
         _insert_new_photo(response.text)
 
 
-# def get_creds():
-#     SCOPES = 'https://www.googleapis.com/auth/photoslibrary'
-#     store = file.Storage('credentials.json')  # TODO: Put this in common dir
-#     creds = store.get()
-#     if not creds or creds.invalid or creds.access_token_expired:
-#         flow = client.flow_from_clientsecrets('client_secrets_web.json', SCOPES)  # TODO: Put this in common dir
-#         creds = tools.run_flow(flow, store)
-#     return creds
-
-
 def _upload_binary_media(filepath, filename):
     creds = get_credentials()
-    with open(filepath, 'rb') as photo_fp:
+    with open(filepath, "rb") as photo_fp:
         binary_file = photo_fp.read()
     url = r"https://photoslibrary.googleapis.com/v1/uploads"
     headers = {
@@ -51,34 +41,20 @@ def _insert_new_photo(token):
     creds = get_credentials()
     headers = {"Authorization": f"Bearer {creds.token}"}
     insert_new_media_item = {
-        "newMediaItems": [
-            {
-                "simpleMediaItem": {
-                    "uploadToken": token
-                }
-            }
-        ]
+        "newMediaItems": [{"simpleMediaItem": {"uploadToken": token}}]
     }
     url = r"https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate"
     r = requests.post(url=url, headers=headers, data=json.dumps(insert_new_media_item))
     response = r.json()
-    status = response['newMediaItemResults'][0]['status']['message']
-    if status != 'OK':
+    status = response["newMediaItemResults"][0]["status"]["message"]
+    if status != "OK":
         logger.info(f"NewMediaItem insertion failed. Code {status}. Token {token}")
     else:
         logger.info(f"Insertion successful token {token}")
     print(f"Media insertion elapsed time: {r.elapsed.microseconds/1000000} seconds")
-    # TODO: Put response 'r' into the database
 
 
 if __name__ == "__main__":
-    # parser = argparse.ArgumentParser()
-    # parser.add_argument('--noauth_local_webserver', action='store_true') # I hope this doesn't break the setting....
-    # parser.add_argument('--name', dest='filename', default=None, help="filename if different than path basename")
-    # parser.add_argument('path', help='path to photo you want to upload')
-    # args = parser.parse_args()
-
-    # upload_to_gphotos(args.path, args.filename)
     upload_to_gphotos(r"C:\Users\SJackson\Pictures\FZ80\P1000127.JPG")
 
     """
