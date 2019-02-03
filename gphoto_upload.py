@@ -1,46 +1,40 @@
-from apiclient.discovery import build
-from httplib2 import Http
-from oauth2client import file, client, tools
-import logging
-from logging.config import dictConfig
-from utils import Config
+from loguru import logger
+import utils
 import requests
 import json
 import os.path
-import argparse
+from oauth2creds import get_credentials
 
-cfg = Config()
-dictConfig(cfg.logging)
-log = logging.getLogger(__name__)
-
+cfg = utils.config()
+logger.add("gphoto_upload.log", rotation="1 MB")
 
 # TODO: This should be a little more mature: check return codes from the insert and make sure all photos made it up
 def upload_to_gphotos(filepath, filename=None):
     if filename is None:
         filename = os.path.basename(filepath)
-    response = upload_binary_media(filepath, filename)
+    response = _upload_binary_media(filepath, filename)
     if response.ok:
-        insert_new_photo(response.text)
+        _insert_new_photo(response.text)
 
 
-def get_creds():
-    SCOPES = 'https://www.googleapis.com/auth/photoslibrary'
-    store = file.Storage('credentials.json')  # TODO: Put this in common dir
-    creds = store.get()
-    if not creds or creds.invalid or creds.access_token_expired:
-        flow = client.flow_from_clientsecrets('client_secrets_web.json', SCOPES)  # TODO: Put this in common dir
-        creds = tools.run_flow(flow, store)
-    return creds
+# def get_creds():
+#     SCOPES = 'https://www.googleapis.com/auth/photoslibrary'
+#     store = file.Storage('credentials.json')  # TODO: Put this in common dir
+#     creds = store.get()
+#     if not creds or creds.invalid or creds.access_token_expired:
+#         flow = client.flow_from_clientsecrets('client_secrets_web.json', SCOPES)  # TODO: Put this in common dir
+#         creds = tools.run_flow(flow, store)
+#     return creds
 
 
-def upload_binary_media(filepath, filename):
-    creds = get_creds()
+def _upload_binary_media(filepath, filename):
+    creds = get_credentials()
     with open(filepath, 'rb') as photo_fp:
         binary_file = photo_fp.read()
     url = r"https://photoslibrary.googleapis.com/v1/uploads"
     headers = {
         "Content-type": "application/octet-stream",
-        "Authorization": f"Bearer {creds.access_token}",
+        "Authorization": f"Bearer {creds.token}",
         "X-Goog-Upload-File-Name": f"{filename}",
         "X-Goog-Upload-Protocol": "raw",
     }
@@ -49,13 +43,13 @@ def upload_binary_media(filepath, filename):
         log_status = "Upload successful"
     else:
         log_status = "Upload failed"
-    log.info(f"{log_status}: Upload elapsed time: {r.elapsed}")
+    logger.info(f"{log_status}: Upload elapsed time: {r.elapsed}")
     return r
 
 
-def insert_new_photo(token):
-    creds = get_creds()
-    headers = {"Authorization": f"Bearer {creds.access_token}"}
+def _insert_new_photo(token):
+    creds = get_credentials()
+    headers = {"Authorization": f"Bearer {creds.token}"}
     insert_new_media_item = {
         "newMediaItems": [
             {
@@ -70,9 +64,9 @@ def insert_new_photo(token):
     response = r.json()
     status = response['newMediaItemResults'][0]['status']['message']
     if status != 'OK':
-        log.info(f"NewMediaItem insertion failed. Code {status}. Token {token}")
+        logger.info(f"NewMediaItem insertion failed. Code {status}. Token {token}")
     else:
-        log.info(f"Insertion successful token {token}")
+        logger.info(f"Insertion successful token {token}")
     print(f"Media insertion elapsed time: {r.elapsed.microseconds/1000000} seconds")
     # TODO: Put response 'r' into the database
 
