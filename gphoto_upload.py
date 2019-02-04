@@ -2,6 +2,7 @@ import utils
 import requests
 import json
 import os.path
+from pprint import pformat
 from oauth2creds import get_credentials
 from loguru import logger
 
@@ -48,9 +49,9 @@ def _insert_new_photo(token):
     response = r.json()
     status = response["newMediaItemResults"][0]["status"]["message"]
     if status != "OK":
-        logger.info(f"NewMediaItem insertion failed. Code {status}. Token {token}")
+        logger.info(f"NewMediaItem insertion failed. {pformat(response)}")
     else:
-        logger.info(f"Insertion successful token {token}")
+        logger.info(f"Insertion successful. {pformat(response)}")
     print(f"Media insertion elapsed time: {r.elapsed.microseconds/1000000} seconds")
 
 

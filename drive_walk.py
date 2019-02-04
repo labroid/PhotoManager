@@ -5,11 +5,10 @@ import functools
 from dataclasses import dataclass
 import oauth2creds
 from googleapiclient.discovery import build
-import logging
-from logging.config import dictConfig
+from loguru import logger
 
+import utils
 from me_models import Gphoto, Gphoto_state
-from utils import Config
 
 FOLDER = "application/vnd.google-apps.folder"
 FILE_FIELDS = "id,imageMediaMetadata/time,md5Checksum,mimeType,name,originalFilename,ownedByMe,parents,size,trashed"
@@ -17,7 +16,7 @@ INIT_FIELDS = f"files({FILE_FIELDS}), nextPageToken"
 UPDATE_FIELDS = f"changes(file({FILE_FIELDS}),fileId,removed),nextPageToken"
 MIME_FILTER = ["image", "video", "application/vnd.google-apps.folder"]
 
-cfg = Config()
+cfg = utils.config()
 service = build("drive", "v3", credentials=oauth2creds.get_credentials())
 me.connect(
     db=cfg.gphotos.database, host=cfg.gphotos.host, alias=cfg.gphotos.gphoto_db_alias
@@ -31,15 +30,13 @@ def main():
 
 class GphotoSync:
     def __init__(self):
-        dictConfig(cfg.logging)
-        self.log = logging.getLogger(__name__)
         self.root = self.get_root()
 
     def sync(self):
         if self.database_clean() and self.start_token() is not None:
             self.update_db()
         else:
-            self.log.info("Database dirty: Rebulding")
+            logger.info("Database dirty: Rebulding")
             self.rebuild_db()
             pass
         self.start_token(update=True)
@@ -50,9 +47,7 @@ class GphotoSync:
         Gphoto.drop_collection()
         self.walk(folder=self.root)
         self.database_clean(set_state=True)
-        self.log.info(
-            f"Full resync elapsed time: {datetime.datetime.now() - start_time}"
-        )
+        logger.info(f"Full resync elapsed time: {datetime.datetime.now() - start_time}")
 
     def get_root(self):
         root_id = service.files().get(fileId="root").execute().get("id")
@@ -75,7 +70,7 @@ class GphotoSync:
         folders = []
         db_nodes = []
         path.append(folder.name)
-        self.log.info(f"Path: {path}")
+        logger.info(f"Path: {path}")
         for node in self.get_nodes(folder):
             node.path = path
             if node.mimeType == FOLDER:
@@ -104,9 +99,7 @@ class GphotoSync:
             elapsed = datetime.datetime.now() - start_time
             count = len(response["files"])
             cumulative += count
-            self.log.info(
-                f"{elapsed} Drive delivered {count} files. Total: {cumulative}"
-            )
+            logger.info(f"{elapsed} Drive delivered {count} files. Total: {cumulative}")
             sterile_nodes = [self.steralize(x) for x in response["files"]]
             nodes += [Gphoto(**x) for x in sterile_nodes]
             nextpagetoken = response.get("nextPageToken")
@@ -131,7 +124,7 @@ class GphotoSync:
                 return None
             return start_token
 
-    def get_drive_changes(self):
+    def get_google_drive_changes(self):
         """
         Google API for changes().list() returns:
         {
@@ -170,7 +163,7 @@ class GphotoSync:
                 )
                 .execute()
             )
-            self.log.info(
+            logger.info(
                 f"Google sent {len(response.get('changes', []))} change records"
             )
             changes += response["changes"]
@@ -183,7 +176,7 @@ class GphotoSync:
     class DriveChange:
         removed: bool
         fileId: str
-        file: dict
+        file: dict = None
         gphoto = None
         kind: str = None
         type: str = None
@@ -191,55 +184,54 @@ class GphotoSync:
         teamDriveId: str = None
         teamDrive: str = None
 
-    def validate_drive_changes(self, drive_changes):
+    def validate_drive_changes(self):
+        drive_changes = self.get_google_drive_changes()
         valid_changes = []
         for change in drive_changes:
             drive_change = self.DriveChange(**change)
+            if drive_change.removed:
+                continue
             drive_change.gphoto = Gphoto(**self.steralize(drive_change.file))
-            drive_change.removed = drive_change.removed or drive_change.gphoto.trashed
             if not any(
                 [mimeType in drive_change.gphoto.mimeType for mimeType in MIME_FILTER]
             ):
-                continue
+                    continue
             if not (
-                os.path.splitext(drive_change.gphoto.name)[1]
+                os.path.splitext(drive_change.gphoto.name)[1].lower()
                 in cfg.local.image_filetypes
             ):
                 continue
+            drive_change.removed = drive_change.removed or drive_change.gphoto.trashed
             drive_change.gphoto.path = self.get_node_path(drive_change.gphoto)
             valid_changes.append(drive_change)
         return valid_changes
 
     def update_db(self):
-        drive_changes = self.get_drive_changes()
-        photo_changes = self.validate_drive_changes(drive_changes)
-        if not photo_changes:
-            self.log.info("No changes to photos detected")
+        drive_changes = self.validate_drive_changes()
+        if not drive_changes:
+            logger.info("No changes to photos detected")
             return
         delete_count = new_count = 0
         self.database_clean(set_state=False)
-        # for change in [x for x in photo_changes if x.removed]: # This probably works
-        for change in photo_changes:
+        for change in drive_changes:
             if change.removed:
-                change.gphoto.delete()
-                self.log.info(
+                Gphoto.objects(gid=change.fileId).delete()
+                logger.info(
                     f"Removing record for file ID {change.fileId} from database if it exists."
                 )
                 delete_count += 1
-                continue
             else:
-                # for change in [x for x in photo_changes if not x.removed]:
                 try:
                     Gphoto.objects(gid=change.gphoto.gid).get()
                 except me.DoesNotExist:
-                    self.log.info(f"Updating record {change.gphoto.name}")
+                    logger.info(f"Updating record {change.gphoto.name}")
                     change.gphoto.save(force_insert=False)
                     new_count += 1
                     continue
                 else:
-                    self.log.info(f"Update skipped; Google ID already in database")
+                    logger.info(f"Update skipped; Google ID already in database")
         self.database_clean(set_state=True)
-        self.log.info(
+        logger.info(
             f"Sync update complete. New file count: {new_count} Deleted file count: {delete_count}"
         )
 
@@ -251,12 +243,12 @@ class GphotoSync:
         try:
             parent = Gphoto.objects(gid=node.parents[0]).get()
         except me.MultipleObjectsReturned as e:
-            self.log.warning(
+            logger.warning(
                 f"Wrong number of records returned for {node.gid}. Error {e}"
             )
             return ["*MultiParents*"]
         except me.DoesNotExist as e:
-            self.log.warning(f"Parent does not exist. Error {e}")
+            logger.warning(f"Parent does not exist. Error {e}")
             return ["*ParentNotInDb*"]
         if parent.path:
             return parent.path + [parent.name]
