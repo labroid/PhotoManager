@@ -5,6 +5,7 @@ import os.path
 import shutil
 import datetime
 from loguru import logger
+from pathlib import Path
 
 import mongoengine as me
 from me_models import Db_connect, Queue, State, Gphoto, Gphoto_parent, SourceList
@@ -17,7 +18,6 @@ cfg = config()
 logger.add("app.log", rotation="1 MB")
 Db_connect()
 
-# TODO: Save source path in permanent database for future naming
 # TODO: Consider changing over to pathlib
 # TODO: Change logging levels to elmiinate most logging
 
@@ -106,11 +106,13 @@ def main():
 class QueueWorker:
     def __init__(self):
         State.drop_collection()
+        self.mirror_root = Path(cfg.local.mirror_root)
         self.state = State(
             purge_ok=cfg.settings.purge_ok,
             mirror_ok=cfg.settings.mirror_ok,
-            mirror_root=cfg.local.mirror_root,
+            mirror_root=self.mirror_root,
         ).save()
+
         self.gphoto_sync = GphotoSync()
         Queue.drop_collection()  # TODO: Consider commenting out - or allow option to repopulate
         self.process_queue()
@@ -123,9 +125,9 @@ class QueueWorker:
             self.check_gphotos_membership()
             self.upload_missing_media()
             self.dequeue()
-            print("Waiting...")
-            # os.sys.exit(1)
-            time.sleep(5)
+            if not Queue.objects(in_gphotos=False):
+                print("Waiting...")
+                time.sleep(5)
 
     def add_candidates(self):
         self.state.reload()
@@ -143,7 +145,7 @@ class QueueWorker:
             logger.info(f"Traversing tree at {top} and adding to queue.")
             for root, dirs, files in os.walk(
                 top
-            ):  # TODO:  Add error trapping argument and function
+            ):
                 for path in [os.path.join(root, filename) for filename in files]:
                     file_ext = os.path.splitext(path)[1].lower()
                     if file_ext in cfg.local.image_filetypes:
@@ -191,23 +193,21 @@ class QueueWorker:
         if upload_candidate:
             upload_to_gphotos(upload_candidate.src_path)
 
-    def mirror_file(self, photo):  # TODO: See if logic here can be cleaned up and DRY
-        dest_path = os.path.join(
-            self.state.mirror_root, *photo.gphotos_path, photo.original_filename
-        )
-        if not os.path.isfile(dest_path):
-            self.copy_and_log(photo=photo, dest=dest_path)
-            logger.info(f"Mirrored {photo.src_path} to {dest_path}")
+    def mirror_file(self, photo):
+        dest = Path(self.mirror_root, *photo.gphotos_path, photo.original_filename)
+        if not dest.is_file():
+            self.copy_and_log(photo=photo, dest=dest)
+            logger.info(f"Mirrored {photo.src_path} to {dest}")
         else:
-            if file_md5sum(dest_path) == file_md5sum(photo.src_path):
+            if file_md5sum(dest) == file_md5sum(photo.src_path):
                 self.copy_and_log(photo=photo, dest=None)
                 logger.info(f"Already mirrored: {photo.src_path}")
             else:
-                name_parts = os.path.splitext(photo.original_filename)
-                new_filename = name_parts[0] + photo.gid[-4:] + name_parts[1]
-                dest_path = os.path.join(os.path.dirname(dest_path), new_filename)
-                self.copy_and_log(photo=photo, dest=dest_path)
-                logger.info(f"Mirrored {photo.src_path} to {dest_path}")
+                name = Path(photo.original_filename)
+                new_filename = name.stem + photo.gid[-4:] + name.suffix
+                dest = dest.parent / new_filename
+                self.copy_and_log(photo=photo, dest=dest)
+                logger.info(f"Mirrored {photo.src_path} to {dest}")
         photo.update(mirrored=True)
 
     def copy_and_log(self, photo, dest=None):
