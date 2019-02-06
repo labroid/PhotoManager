@@ -249,7 +249,7 @@ class GphotoSync:
             return ["*MultiParents*"]
         except me.DoesNotExist as e:
             logger.warning(f"Parent does not exist. Error {e}")
-            return ["*ParentNotInDb*"]
+            return []
         if parent.path:
             return parent.path + [parent.name]
         else:

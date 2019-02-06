@@ -18,3 +18,8 @@ local:
   log_file_base: "C:\\Users\\SJackson\\Documents\\Personal\\Programming"
   mongod_path: "C:\\Program Files\\MongoDB\\Server\\3.2\\bin\\mongod.exe"
   database: "photo_manager"
+
+path_history:
+  host: 'localhost'
+  database: 'path_history'
+  collection: 'path_history'

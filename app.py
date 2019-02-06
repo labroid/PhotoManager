@@ -7,7 +7,7 @@ import datetime
 from loguru import logger
 
 import mongoengine as me
-from me_models import Db_connect, Queue, State, Gphoto, Gphoto_parent
+from me_models import Db_connect, Queue, State, Gphoto, Gphoto_parent, SourceList
 
 from utils import file_md5sum, config
 from gphoto_upload import upload_to_gphotos
@@ -112,7 +112,7 @@ class QueueWorker:
             mirror_root=cfg.local.mirror_root,
         ).save()
         self.gphoto_sync = GphotoSync()
-        # Queue.drop_collection()
+        Queue.drop_collection()  # TODO: Consider commenting out - or allow option to repopulate
         self.process_queue()
 
     def process_queue(self):
@@ -151,7 +151,9 @@ class QueueWorker:
                         dirsize += size
                         Queue(src_path=path, size=size).save()
                     else:
-                        ext = file_ext.replace('.', '')  # Because database can't take dict indices starting with .
+                        ext = file_ext.replace(
+                            ".", ""
+                        )  # Because database can't take dict indices starting with .
                         excluded = self.state.excluded_ext_dict
                         if file_ext in excluded:
                             excluded[ext] += 1
@@ -159,17 +161,10 @@ class QueueWorker:
                             excluded[ext] = 1
                         self.state.update(excluded_ext_dict=excluded)
         self.state.save()
-        # if self.state.excluded_ext_dict:
-        #     excluded_list = [
-        #         (str(k).replace(".", "") + "(" + str(v) + ")")
-        #         for k, v in excluded_exts.items()
-        #     ]
-        # else:
-        #     excluded_list = ["None"]
         elapsed = datetime.datetime.now() - start
         self.state.modify(
             dirsize=self.state.dirsize + dirsize,
-            dirtime=elapsed.seconds + elapsed.microseconds/1e6,
+            dirtime=elapsed.seconds + elapsed.microseconds / 1e6,
         )
         return
 
@@ -185,6 +180,7 @@ class QueueWorker:
                 photo.gphotos_path = match.path
                 photo.gid = match.gid
                 photo.in_gphotos = True
+                photo.original_filename = match.originalFilename
             else:
                 photo.in_gphotos = False
             photo.save()
@@ -195,13 +191,35 @@ class QueueWorker:
         if upload_candidate:
             upload_to_gphotos(upload_candidate.src_path)
 
-    def mirror_file(self, photo):
-        dest_path = os.path.join(self.state.mirror_root, *photo.gphotos_path, photo.gid)
+    def mirror_file(self, photo):  # TODO: See if logic here can be cleaned up and DRY
+        dest_path = os.path.join(
+            self.state.mirror_root, *photo.gphotos_path, photo.original_filename
+        )
         if not os.path.isfile(dest_path):
-            os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-            shutil.copy2(photo.src_path, dest_path)
-            photo.update(mirrored=True)
-            logger.info("Mirrored {} to {}".format(photo.src_path, dest_path))
+            self.copy_and_log(photo=photo, dest=dest_path)
+            logger.info(f"Mirrored {photo.src_path} to {dest_path}")
+        else:
+            if file_md5sum(dest_path) == file_md5sum(photo.src_path):
+                self.copy_and_log(photo=photo, dest=None)
+                logger.info(f"Already mirrored: {photo.src_path}")
+            else:
+                name_parts = os.path.splitext(photo.original_filename)
+                new_filename = name_parts[0] + photo.gid[-4:] + name_parts[1]
+                dest_path = os.path.join(os.path.dirname(dest_path), new_filename)
+                self.copy_and_log(photo=photo, dest=dest_path)
+                logger.info(f"Mirrored {photo.src_path} to {dest_path}")
+        photo.update(mirrored=True)
+
+    def copy_and_log(self, photo, dest=None):
+        if dest:
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            shutil.copy2(photo.src_path, dest)
+        try:
+            sources = SourceList.objects(md5sum=photo.md5sum).get()
+        except me.DoesNotExist:
+            SourceList(md5sum=photo.md5sum, paths=[photo.src_path]).save()
+        else:
+            sources.update(add_to_set__paths=[photo.src_path])
 
     def dequeue(self):
         for photo in Queue.objects(in_gphotos=True):
@@ -213,7 +231,7 @@ class QueueWorker:
                 and os.path.isfile(photo.src_path)
             ):
                 print(f"This is where we would delete from source {photo.src_path}")
-            #    os.remove(photo.src_path)
+                #    os.remove(photo.src_path)
                 photo.update(purged=True)
 
 

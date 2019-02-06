@@ -9,18 +9,31 @@ def file_md5sum(path):
     BUF_SIZE = 65536
 
     md5 = hashlib.md5()
-    try:
-        f = open(path, "rb")
-    except IOError:
-        logging.error("Can't open path {}".format(path))
-    else:
-        with f:
-            while True:
-                data = f.read(BUF_SIZE)
-                if not data:
-                    break
-                md5.update(data)
+    # try:
+    with open(path, 'rb') as f:
+        while True:
+            data = f.read(BUF_SIZE)
+            if not data:
+                break
+            md5.update(data)
     return md5.hexdigest()
+
+    # except IOError:
+
+
+    # try:
+    #     f = open(path, "rb")
+    # except IOError:
+    #     logging.error("Can't open path {}".format(path))
+    #     return ''
+    # else:
+    #     with f:
+    #         while True:
+    #             data = f.read(BUF_SIZE)
+    #             if not data:
+    #                 break
+    #             md5.update(data)
+    # return md5.hexdigest()
 
 
 def stat_node(nodepath):
@@ -78,10 +91,18 @@ class Gphotos:
 
 
 @dataclass
+class PathHistory:
+    host: str
+    database: str
+    collection: str
+
+
+@dataclass
 class Cfg:
     settings: Settings
     local: Local
     gphotos: Gphotos
+    path_history: PathHistory
 
 
 def config():
@@ -91,5 +112,6 @@ def config():
         settings=Settings(**config_dict["settings"]),
         local=Local(**config_dict["local"]),
         gphotos=Gphotos(**config_dict["gphotos"]),
+        path_history=PathHistory(**config_dict["path_history"]),
     )
     return cfg
