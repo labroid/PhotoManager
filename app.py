@@ -8,7 +8,7 @@ from loguru import logger
 from pathlib import Path
 
 import mongoengine as me
-from me_models import Db_connect, Queue, State, Gphoto, Gphoto_parent, SourceList
+from me_models import Db_connect, Queue, State, Gphoto, SourceList
 
 from utils import file_md5sum, config
 from gphoto_upload import upload_to_gphotos
@@ -18,95 +18,20 @@ cfg = config()
 logger.add("app.log", rotation="1 MB")
 Db_connect()
 
-# TODO: Consider changing over to pathlib
-# TODO: Change logging levels to elmiinate most logging
+# TODO: Change logging levels to eliminate most logging
 
 
 def main():
     QueueWorker()
     print("Main Done")
     """
-    Queue maintenance runs continuously. Analyze queue before adding new files (since we need to know if files
-    are already in the queue as well as already in gphotos to know if we want to add them to the queue).
-
-    drop queue db (in future make durable and check)
-    for each file in gphotos queue directory
-        put file stats in queue db and mark as in queue
-    while True: (async loop?)
-        for each file in queue db
-            update missing MD5 sums
-            update missing gphoto membership
-            mirror files already in gphotos and not mirrored
-            optionally purge files already in gphotos if source still avalable
-            remove files in gphotos from queue and mark done in db
-        check for new files to be added (separate process or database for selecting and adding?)
-            Get dir list from user and add to candidates
-            Update missing MD5 sums for candidates
-            update missing gphoto membership for queue
-            if not in gphotos and not in gphoto queue add to gphoto queue
-            mirror files already in gphotos and not mirrored
-            Add upload candidates to gphoto queue.  Assure no name collision by unique directory name.
-
-    *******Async try1*******
-
-    drop queue db (TODO: make durable and check)
-    for each file in gphotos queue directory
-        put file stats in queue db and mark as in queue
-
-    async process_files()
-        get next file not in process
-        mark db as in process
-        await purge_file()
-
-    async purge_file():
-        await mirror_file()
-        if purge_enabled:
-            delete file
-
-    async mirror_file():
-        await file_in_gphotos()
-        if mirror_enabled:
-            copy to mirror()
-
-    async file_in_gphotos():
-        await get_md5()
-        await check_gphotos()
-
-*******Async try 2########
-    drop queue db (in future make durable and check)
-    drop candidates db
-    for each file in gphotos queue directory
-        put file stats in queue db and mark as in queue
-
-    async queue_worker():
-        while True:
-            for each unprocessed file in queue db
-                mark file as processing
-                await update missing MD5 sums(_id list)
-                await update missing gphoto membership(md5 list)
-                await mirror files already in gphotos and not mirrored
-                await optionally purge files already in gphotos if source still avalable
-                await remove files in gphotos from queue and mark done in db
-
-    async candidate_worker():
-        while True:
-            check for new files to be added (separate process or database for selecting and adding?)
-                await Get dir list from user and add file stats to candidate
-                await Update missing MD5 sums for candidates
-                await update missing gphoto membership for candidates
-                await if not in gphotos and not in gphoto queue add to gphoto queue
-                await mirror files already in gphotos and not mirrored
-                await Add upload candidates to gphoto queue.  Assure no name collision by unique directory name.
-                await optionally purge files in gphotos if source still available
-                await remove files from candidates that are mirrored and in gphotos
-
+    Queue maintenance runs continuously. 
     """
 
 
 class QueueWorker:
     def __init__(self):
         State.drop_collection()
-        self.mirror_root = Path(cfg.local.mirror_root)
         self.state = State(
             purge_ok=cfg.settings.purge_ok,
             mirror_ok=cfg.settings.mirror_ok,
@@ -136,7 +61,6 @@ class QueueWorker:
         self.state.modify(old_target=self.state.target)
         logger.info("Start processing target dir(s)...")
         dirsize = 0
-        photos = {}
 
         start = datetime.datetime.now()
         self.state.modify(dirlist=list(glob.iglob(self.state.target)))
@@ -168,11 +92,13 @@ class QueueWorker:
         )
         return
 
+    # noinspection PyMethodMayBeStatic
     def update_md5s(self):
         for photo in Queue.objects(md5sum=None):
             photo.modify(md5sum=file_md5sum(photo.src_path))
         logger.info("MD5 Done")
 
+    # noinspection PyMethodMayBeStatic
     def check_gphotos_membership(self):
         for photo in Queue.objects(me.Q(md5sum__ne=None) & me.Q(in_gphotos=False)):
             match = Gphoto.objects(md5Checksum=photo.md5sum).first()
@@ -186,13 +112,14 @@ class QueueWorker:
             photo.save()
         logger.info("Check Gphotos enqueue done")
 
+    # noinspection PyMethodMayBeStatic
     def upload_missing_media(self):
         upload_candidate = Queue.objects(in_gphotos=False).first()
         if upload_candidate:
             upload_to_gphotos(upload_candidate.src_path)
 
     def mirror_file(self, photo):
-        dest = Path(self.mirror_root, *photo.gphotos_path, photo.original_filename)
+        dest = Path(cfg.local.mirror_root, *photo.gphotos_path, photo.original_filename)
         if not dest.is_file():
             self.copy_file(photo=photo, dest=dest)
             logger.info(f"Mirrored {photo.src_path} to {dest}")
@@ -208,6 +135,7 @@ class QueueWorker:
                 logger.info(f"Mirrored {photo.src_path} to {dest}")
         photo.update(mirrored=True)
 
+    # noinspection PyMethodMayBeStatic
     def copy_file(self, photo, dest=None):
         if dest:
             os.makedirs(os.path.dirname(dest), exist_ok=True)

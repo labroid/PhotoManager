@@ -42,15 +42,15 @@ class Gphoto_state(me.Document):
     meta = {"db_alias": cfg.gphotos.collection}
 
 
-class Gphoto_parent(me.Document):  # Depricated?
-    gid = me.StringField()
-    mimeType = me.StringField()
-    name = me.StringField()
-    ownedByMe = me.BooleanField()
-    parents = me.ListField()
-    trashed = me.BooleanField()
-    path = me.ListField()
-    meta = {"db_alias": cfg.gphotos.collection}
+# class Gphoto_parent(me.Document):  # Depricated?
+#     gid = me.StringField()
+#     mimeType = me.StringField()
+#     name = me.StringField()
+#     ownedByMe = me.BooleanField()
+#     parents = me.ListField()
+#     trashed = me.BooleanField()
+#     path = me.ListField()
+#     meta = {"db_alias": cfg.gphotos.collection}
 
 
 class Photo(me.Document):
