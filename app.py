@@ -110,7 +110,7 @@ class QueueWorker:
         self.state = State(
             purge_ok=cfg.settings.purge_ok,
             mirror_ok=cfg.settings.mirror_ok,
-            mirror_root=self.mirror_root,
+            mirror_root=cfg.local.mirror_root,
         ).save()
 
         self.gphoto_sync = GphotoSync()
@@ -143,25 +143,23 @@ class QueueWorker:
         logger.info(f"Target list: {self.state.dirlist}")
         for top in self.state.dirlist:
             logger.info(f"Traversing tree at {top} and adding to queue.")
-            for root, dirs, files in os.walk(
-                top
-            ):
-                for path in [os.path.join(root, filename) for filename in files]:
-                    file_ext = os.path.splitext(path)[1].lower()
-                    if file_ext in cfg.local.image_filetypes:
-                        size = os.stat(path).st_size
-                        dirsize += size
-                        Queue(src_path=path, size=size).save()
+            top_path = Path(top)
+            for path in top_path.rglob("**/*"):
+                ext = path.suffix.lower()
+                if ext in cfg.local.image_filetypes:
+                    size = path.stat().st_size
+                    dirsize += size
+                    Queue(src_path=str(path), size=size).save()
+                else:
+                    ext = ext.replace(
+                        ".", ""
+                    )  # Database can't handle keys starting with dot
+                    excluded = self.state.excluded_ext_dict
+                    if ext in excluded:
+                        excluded[ext] += 1
                     else:
-                        ext = file_ext.replace(
-                            ".", ""
-                        )  # Because database can't take dict indices starting with .
-                        excluded = self.state.excluded_ext_dict
-                        if file_ext in excluded:
-                            excluded[ext] += 1
-                        else:
-                            excluded[ext] = 1
-                        self.state.update(excluded_ext_dict=excluded)
+                        excluded[ext] = 1
+                    self.state.update(excluded_ext_dict=excluded)
         self.state.save()
         elapsed = datetime.datetime.now() - start
         self.state.modify(
@@ -196,21 +194,21 @@ class QueueWorker:
     def mirror_file(self, photo):
         dest = Path(self.mirror_root, *photo.gphotos_path, photo.original_filename)
         if not dest.is_file():
-            self.copy_and_log(photo=photo, dest=dest)
+            self.copy_file(photo=photo, dest=dest)
             logger.info(f"Mirrored {photo.src_path} to {dest}")
         else:
             if file_md5sum(dest) == file_md5sum(photo.src_path):
-                self.copy_and_log(photo=photo, dest=None)
+                self.copy_file(photo=photo, dest=None)
                 logger.info(f"Already mirrored: {photo.src_path}")
             else:
                 name = Path(photo.original_filename)
                 new_filename = name.stem + photo.gid[-4:] + name.suffix
                 dest = dest.parent / new_filename
-                self.copy_and_log(photo=photo, dest=dest)
+                self.copy_file(photo=photo, dest=dest)
                 logger.info(f"Mirrored {photo.src_path} to {dest}")
         photo.update(mirrored=True)
 
-    def copy_and_log(self, photo, dest=None):
+    def copy_file(self, photo, dest=None):
         if dest:
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             shutil.copy2(photo.src_path, dest)
@@ -224,7 +222,8 @@ class QueueWorker:
     def dequeue(self):
         for photo in Queue.objects(in_gphotos=True):
             if self.state.mirror_ok:
-                self.mirror_file(photo)
+                if not photo.mirrored:
+                    self.mirror_file(photo)
             if (
                 self.state.purge_ok
                 and photo.src_path
