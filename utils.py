@@ -43,7 +43,7 @@ def stat_node(nodepath):
     except:
         error_message = "Can't stat file at {0}".format(repr(nodepath))
         logging.error(error_message)
-        raise (ValueError, error_message)
+        raise ValueError(error_message)
     return file_stat
 
 
