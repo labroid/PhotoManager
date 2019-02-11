@@ -1,4 +1,3 @@
-import mongoengine as me
 from me_models import Db_connect, State
 
 Db_connect()

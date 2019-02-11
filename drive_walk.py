@@ -38,7 +38,6 @@ class GphotoSync:
         else:
             logger.info("Database dirty: Rebulding")
             self.rebuild_db()
-            pass
         self.start_token(update=True)
 
     def rebuild_db(self):
@@ -106,6 +105,7 @@ class GphotoSync:
             if nextpagetoken is None:
                 return nodes
 
+    # noinspection PyMethodMayBeStatic
     def start_token(self, update=False):
         if update:
             start_token = service.changes().getStartPageToken().execute()
@@ -124,6 +124,7 @@ class GphotoSync:
                 return None
             return start_token
 
+    # noinspection PyMethodMayBeStatic
     def get_google_drive_changes(self):
         """
         Google API for changes().list() returns:
@@ -195,7 +196,7 @@ class GphotoSync:
             if not any(
                 [mimeType in drive_change.gphoto.mimeType for mimeType in MIME_FILTER]
             ):
-                    continue
+                continue
             if not (
                 os.path.splitext(drive_change.gphoto.name)[1].lower()
                 in cfg.local.image_filetypes
@@ -255,6 +256,7 @@ class GphotoSync:
         else:
             return self.get_node_path(parent) + [parent.name]
 
+    # noinspection PyMethodMayBeStatic
     def steralize(self, node):
         if "id" in node:  # Mongoengine reserves 'id'
             node["gid"] = node.pop("id")
