@@ -18,9 +18,9 @@ class Db_connect:
 
 
 class Gphoto(me.Document):  # TODO: Remove strict: false from metadata once db is clean
-    gid = me.StringField(unique=True)
+    gid = me.StringField()
     imageMediaMetadata = me.DictField()
-    md5Checksum = me.StringField()
+    md5Checksum = me.StringField(unique=True)
     mimeType = me.StringField()
     name = me.StringField()
     originalFilename = me.StringField()
@@ -55,14 +55,10 @@ class Gphoto_state(me.Document):
 
 class Photo(me.Document):
     src_path = me.StringField(default=None)
-    # queue_path = me.StringField(default=None)  Probably deprecated. Commented to see if it throws error
     size = me.IntField(default=None)
     md5sum = me.StringField(default=None)
     gid = me.StringField(default=None)
     in_gphotos = me.BooleanField(default=False)
-    queue_state = me.StringField(
-        default=None, choices=["candidate", "enqueued", "done"]
-    )
     mirrored = me.BooleanField(default=False)
     purged = me.BooleanField(default=False)
     gphotos_path = me.ListField(default=None)
