@@ -36,6 +36,7 @@ class QueueWorker:
             purge_ok=cfg.settings.purge_ok,
             mirror_ok=cfg.settings.mirror_ok,
             mirror_root=cfg.local.mirror_root,
+            status=['\r\n', '\r\n', 'Initialized\r\n']
         ).save()
 
         self.gphoto_sync = GphotoSync()
@@ -44,6 +45,7 @@ class QueueWorker:
 
     def process_queue(self):
         while True:
+            self.status('Syncing with Gphotos')
             self.gphoto_sync.sync()
             self.add_candidates()
             self.update_md5s()
@@ -59,14 +61,18 @@ class QueueWorker:
         if self.state.target == self.state.old_target:
             return
         self.state.modify(old_target=self.state.target)
-        logger.info("Start processing target dir(s)...")
+        message = 'Walking target directories...'
+        logger.info(message)
+        self.status(message)
         dirsize = 0
 
         start = datetime.datetime.now()
         self.state.modify(dirlist=list(glob.iglob(self.state.target)))
         logger.info(f"Target list: {self.state.dirlist}")
         for top in self.state.dirlist:
-            logger.info(f"Traversing tree at {top} and adding to queue.")
+            message = f'Traversing tree at {top} and adding to queue.'
+            logger.info(message)
+            self.status(message)
             top_path = Path(top)
             for path in top_path.rglob("**/*"):
                 ext = path.suffix.lower()
@@ -94,12 +100,14 @@ class QueueWorker:
 
     # noinspection PyMethodMayBeStatic
     def update_md5s(self):
+        self.status("Updating MD5s...")
         for photo in Queue.objects(md5sum=None):
             photo.modify(md5sum=file_md5sum(photo.src_path))
         logger.info("MD5 Done")
 
     # noinspection PyMethodMayBeStatic
     def check_gphotos_membership(self):
+        self.status('Checking for photos not in Gphotos')
         for photo in Queue.objects(me.Q(md5sum__ne=None) & me.Q(in_gphotos=False)):
             match = Gphoto.objects(md5Checksum=photo.md5sum).first()
             if match:
@@ -114,11 +122,22 @@ class QueueWorker:
 
     # noinspection PyMethodMayBeStatic
     def upload_missing_media(self):
-        upload_candidate = Queue.objects(in_gphotos=False).first()
+
+        upload_candidate = Queue.objects(
+            me.Q(in_gphotos=False) & me.Q(uploading=False) & me.Q(uploaded=False)
+        ).first()
         if upload_candidate:
-            upload_to_gphotos(upload_candidate.src_path)
+            self.status(f'Uploading {upload_candidate.name}')
+            tries = upload_candidate.upload_tries + 1
+            upload_candidate.modify(uploading=True)
+            success, elapsed = upload_to_gphotos(upload_candidate.src_path)
+            if success:
+                upload_candidate.modify(uploading=False, uploaded=True, upload_tries=tries, upload_elapsed=elapsed)
+            else:
+                upload_candidate.modify(uploading=False, uploaded=False, upload_tries=tries, upload_elapsed=elapsed)
 
     def mirror_file(self, photo):
+        self.status("Mirroring files")
         dest = Path(cfg.local.mirror_root, *photo.gphotos_path, photo.original_filename)
         if not dest.is_file():
             self.copy_file(photo=photo, dest=dest)
@@ -157,9 +176,17 @@ class QueueWorker:
                 and photo.src_path
                 and os.path.isfile(photo.src_path)
             ):
-                print(f"This is where we would delete from source {photo.src_path}")
+                message = f"This is where we would delete from source {photo.src_path}"
+                print(message)
+                self.status(message)
                 #    os.remove(photo.src_path)
                 photo.update(purged=True)
+
+    def status(self, status):
+        temp = self.state.status
+        temp.pop(0)
+        temp.append(status + '\r\n')
+        self.state.update(status=temp)
 
 
 if __name__ == "__main__":
