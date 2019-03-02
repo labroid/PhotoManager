@@ -61,6 +61,10 @@ class Photo(me.Document):
     in_gphotos = me.BooleanField(default=False)
     mirrored = me.BooleanField(default=False)
     purged = me.BooleanField(default=False)
+    uploaded = me.BooleanField(default=False)
+    uploading = me.BooleanField(default=False)
+    upload_tries = me.IntField(default=0)
+    upload_elapsed = me.FloatField(default=0)
     gphotos_path = me.ListField(default=None)
     original_filename = me.StringField(default=None)
     gphoto_meta = me.DictField(default=None)  # TODO:  Delete this?
@@ -87,7 +91,9 @@ class State(me.Document):
     mirror_root = me.StringField(default="")
     purge_ok = me.BooleanField(default=False)
     enqueue_ok = me.BooleanField(default=True)
+    status = me.StringField(default='')
     meta = {"db_alias": cfg.local.database}
+
 
 
 class SourceList(me.Document):
