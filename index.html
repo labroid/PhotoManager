@@ -1,0 +1,90 @@
+<html lang="en" xmlns:v-on="http://www.w3.org/1999/xhtml">
+<head>
+    <meta charset="UTF-8">
+    <title>Design Tool</title>
+    <script src='./node_modules/vue/dist/vue.js'></script>
+    <script src='./node_modules/axios/dist/axios.js'></script>
+
+</head>
+<body>
+
+<h1>
+    Design Tool
+</h1>
+
+<div id="app">
+    Candidates root: <input v-model="message" placeholder="full path here">
+    <button v-on:click="go">Go</button>
+    {{pushed}}
+    <br>
+    Path Received: {{ target }}
+    <p></p>
+    Mirror Files: <input type="checkbox" id="mirror_checkbox" v-model="state.mirror_ok">
+    <label for="mirror_checkbox">{{ state.mirror_ok }}</label>
+    Purge Files: <input type="checkbox" id="purge_checkbox" v-model="state.purge_ok">
+    <label for="purge_checkbox">{{ state.purge_ok }}</label>
+    <p></p>
+    <div style="width: 300px; border: 2px solid black; padding: 5px; margin: 1px">
+        <div v-for="stat in state.status">
+            <!--<div v-for="stat in state.status", class="statuslist">-->
+            {{stat}}
+        </div>
+    </div>
+    <p>{{status}}</p>
+    MD5 Sums {{ state.MD5sum_done }} of {{state.total_files}}
+    <br>
+    In Gphotos {{state.in_gphotos}} of {{state.total_files}}
+    <br>
+    Mirrored {{state.mirrored}} of {{state.total_files}}
+    <br>
+    Purged {{state.purged}} of {{state.total_files}}
+
+</div>
+
+<script>
+    vm = new Vue({
+        el: '#app',
+        data: {
+            state: {
+                total_files: '-',
+                MD5sum_done: '-',
+                in_gphotos: '-',
+                mirrored: '-',
+                purged: '-',
+                dirlist: [],
+                dirfilecount: '-',
+                excluded_ext_dict: {},
+                dirsize: '-',
+                dirtime: '-',
+                mirror_root: '-',
+                enqueue_ok: false,
+                target: '-',
+                old_target: '-',
+                mirror_ok: '-',
+                purge_ok: '-',
+                status: ['first\n\r', 'second', 'third'],
+            },
+            pushed: false,
+            message: '',
+
+        },
+        methods: {
+            go: function (event) {
+                console.log("button pushed");
+                axios.put('http://localhost:5000/path/', vm.message)
+
+            }
+        },
+        mounted() {
+            axios.get('http://localhost:5000/state')
+                .then(function (response) {
+                    vm.state = Object.assign(vm.state, response.data);
+                })
+                .catch(function (error) {
+                    // console.log(error);
+                });
+        }
+    });
+</script>
+</body>
+</html>
