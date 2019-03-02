@@ -14,9 +14,13 @@ def upload_to_gphotos(filepath, filename=None):
     if filename is None:
         filename = os.path.basename(filepath)
     response = _upload_binary_media(filepath, filename)
-    if response.ok:
-        _insert_new_photo(response.text)
+    if not response.ok:
+        success = False
+        elapsed = response.elapsed.microseconds/1_000_000
 
+    else:
+        success, elapsed = _insert_new_photo(response.text)
+    return success, elapsed
 
 def _upload_binary_media(filepath, filename):
     creds = get_credentials()
@@ -50,9 +54,13 @@ def _insert_new_photo(token):
     status = response["newMediaItemResults"][0]["status"]["message"]
     if status != "OK":
         logger.info(f"NewMediaItem insertion failed. {pformat(response)}")
+        success = False
     else:
         logger.info(f"Insertion successful. {pformat(response)}")
-    print(f"Media insertion elapsed time: {r.elapsed.microseconds/1000000} seconds")
+        success = True
+    elapsed = r.elapsed.microseconds/1_000_000
+    print(f"Media insertion elapsed time: {r.elapsed.microseconds/1_000_000} seconds")
+    return success, elapsed
 
 
 if __name__ == "__main__":
