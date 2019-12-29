@@ -174,28 +174,32 @@ class QueueWorker:
                 )
 
     def mirror_file(self, photo):
-        self.status("Mirroring files")
         dest = Path(cfg.local.mirror_root, *photo.gphotos_path, photo.original_filename)
         if not dest.is_file():
             self.copy_file(photo=photo, dest=dest)
-            logger.info(f"Mirrored {photo.src_path} to {dest}")
-        else:
-            if file_md5sum(dest) == file_md5sum(photo.src_path):
-                # self.copy_file(photo=photo, dest=None)
-                logger.info(f"Already mirrored: {photo.src_path}")
-            else:
-                name = Path(photo.original_filename)
-                new_filename = name.stem + photo.gid[-4:] + name.suffix
-                dest = dest.parent / new_filename
-                self.copy_file(photo=photo, dest=dest)
-                logger.info(f"Mirrored {photo.src_path} to {dest}")
-        photo.modify(mirrored=True)
+            return
+        if file_md5sum(dest) == file_md5sum(photo.src_path):
+            logger.info(f"Already mirrored: {photo.src_path}")
+            if self.state.purge_ok:
+                os.remove(photo.src_path)
+                photo.update(purged=True)
+            photo.modify(mirrored=True)
+            return
+        name = Path(photo.original_filename)
+        new_filename = name.stem + photo.gid[-4:] + name.suffix
+        dest = dest.parent / new_filename
+        self.copy_file(photo=photo, dest=dest)
 
     # noinspection PyMethodMayBeStatic
-    def copy_file(self, photo, dest=None):
-        if dest:
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
+    def copy_file(self, photo, dest):
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        if self.state.purge_ok:
+            shutil.move(photo.src_path, dest)
+            photo.update(purged=True)
+        else:
             shutil.copy2(photo.src_path, dest)
+        photo.update(mirrored=True)
+        logger.info(f"Mirrored {photo.src_path} to {dest}")
 
     def dequeue(self):
         if self.state.mirror_ok:
@@ -207,6 +211,14 @@ class QueueWorker:
                     logger.info(f"Purge: {photo.src_path}")
                     os.remove(photo.src_path)
                     photo.update(purged=True)
+
+    # def dequeue(self):
+    #     if self.state.mirror_ok and self.state.purge_ok:
+    #         pass #move file and update database
+    #     elif self.state.mirror_ok and not self.state.purge_ok:
+    #         pass #copy file and update database
+    #     elif not self.state.mirror_ok and self.state.purge_ok:
+    #         pass #delete w/o copying
 
     def status(self, status):
         temp = self.state.status
