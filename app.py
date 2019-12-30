@@ -1,3 +1,4 @@
+# This comment allows commit of the last working version before changing post Gphotos/Gdrive deprecation
 import glob
 import time
 import os
