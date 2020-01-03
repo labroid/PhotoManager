@@ -1,24 +1,30 @@
-# This comment allows commit of the last working version before changing post Gphotos/Gdrive deprecation
+import datetime
 import glob
-import time
+import hashlib
+import io
 import os
 import os.path
 import shutil
-import datetime
-
-from loguru import logger
+import time
 from pathlib import Path
+import json
 
 import mongoengine as me
-from me_models import DbConnect, Queue, State, Gphoto, SourceArchive, Candidates
+from PIL import Image
+from image_match.goldberg import ImageSignature
+from loguru import logger
 
+# from gphoto_upload import upload_to_gphotos
+from me_models import DbConnect, Queue, State, Gphoto, SourceArchive
 from utils import file_md5sum, config
-from gphoto_upload import upload_to_gphotos
-from drive_walk import GphotoSync
+from firebase import get_firestore_db
 
 cfg = config()
 logger.add("app.log", rotation="1 MB")
 DbConnect()
+
+db = get_firestore_db()
+photos = db.collection('local_photos')
 
 # TODO: Change logging levels to eliminate most logging
 
@@ -41,26 +47,23 @@ class QueueWorker:
             status=["\r\n", "\r\n", "Initialized\r\n"],
         ).save()
 
-        self.gphoto_sync = GphotoSync()
-        while True:
-            response = input("Clear upload Queue? (y/n)")
-            if response == "y":
-                Queue.drop_collection()
-                logger.info("********** Starting new run with cleared queue **********")
-                break
-            if response == "n":
-                logger.info("********** Starting new run with existing queue **********")
-                break
+        # while True:
+        #     response = input("Clear upload Queue? (y/n)")
+        #     if response == "y":
+        #         Queue.drop_collection()
+        #         logger.info("********** Starting new run with cleared queue **********")
+        #         break
+        #     if response == "n":
+        #         logger.info("********** Starting new run with existing queue **********")
+        #         break
         self.process_queue()
 
     def process_queue(self):
         while True:
-            self.status("Syncing with Gphotos")
-            self.gphoto_sync.sync()
             self.add_candidates()
-            self.check_gphotos_membership()
-            self.upload_missing_media()
-            self.dequeue()
+            # self.check_gphotos_membership()
+            # self.upload_missing_media()
+            # self.dequeue()
             print("Waiting...")
             time.sleep(5)
             # if not Queue.objects(in_gphotos=False):
@@ -75,12 +78,17 @@ class QueueWorker:
         self.state.modify(dirlist=list(glob.iglob(self.state.target)))
         return True
 
+    def get_bytes(self, path):
+        with open(path, mode="rb") as fp:
+            return fp.read()
+
     def add_candidates(self):
         if not self.new_target_list():
-            return()
+            return ()
         dirsize = 0
         start = datetime.datetime.now()
         logger.info(f"Walking target list: {self.state.dirlist}")
+        gis = ImageSignature()
         for top in self.state.dirlist:
             message = f"Traversing tree at {top} and adding to queue."
             logger.info(message)
@@ -88,13 +96,34 @@ class QueueWorker:
             top_path = Path(top)
             for path in top_path.rglob("**/*"):
                 ext = path.suffix.lower()
-                if ext in cfg.local.image_filetypes:
+                if ext in cfg.settings.image_filetypes:
                     size = path.stat().st_size
                     dirsize += size
-                    md5sum = file_md5sum(path)
-                    if not Queue.objects(md5sum=md5sum):
-                        Queue(src_path=str(path), size=size, md5sum=md5sum).save()
-                        logger.info(f"Enqueuing: {path}")
+                    photo_b = self.get_bytes(path)
+                    md5sum = hashlib.md5(photo_b).hexdigest()
+                    # if not MD%sum already in database:
+                    im = Image.open(io.BytesIO(photo_b))
+                    tags = {
+                        "cameraMake": im.info['parsed_exif'].get(0x010f, ""),
+                        "cameraModel": im.info['parsed_exif'].get(0x0110, ""),
+                        "creationTime": im.info['parsed_exif'].get(0x9003, ""),
+                        "width": im.width,
+                        "height": im.height,
+                    }
+                    image_md5 = hashlib.md5(im.tobytes()).hexdigest()
+                    signature = gis.generate_signature(
+                        photo_b, bytestream=True
+                    ).tolist()
+                    record = {
+                        "src_path": str(path),
+                        "size": size,
+                        "md5sum": md5sum,
+                        "image_md5": image_md5,
+                        "signature": signature,
+                        "mediaMetadata": tags,
+                    }
+                    photos.add(record)
+                    logger.info(f"Added: {path}")
                 else:
                     ext = ext.replace(
                         ".", ""
@@ -114,11 +143,6 @@ class QueueWorker:
         return
 
     # noinspection PyMethodMayBeStatic
-    def update_md5s(self):
-        self.status("Updating MD5s...")
-        for photo in Queue.objects(md5sum=None):
-            photo.modify(md5sum=file_md5sum(photo.src_path))
-        logger.info("MD5 Done")
 
     # noinspection PyMethodMayBeStatic
     def check_gphotos_membership(self):
@@ -143,36 +167,38 @@ class QueueWorker:
                 SourceArchive(md5sum=photo.md5sum, paths=[photo.src_path]).save()
             else:
                 sources.update(add_to_set__paths=[photo.src_path])
-        logger.info(f"In gphotos: {Queue.objects(in_gphotos=True).count()}, Not in gphotos: {Queue.objects(in_gphotos=False).count()}")
+        logger.info(
+            f"In gphotos: {Queue.objects(in_gphotos=True).count()}, Not in gphotos: {Queue.objects(in_gphotos=False).count()}"
+        )
 
-    # noinspection PyMethodMayBeStatic
-    def upload_missing_media(self):
-        if not self.state.upload_ok:
-            return
-        upload_candidate = Queue.objects(
-            me.Q(in_gphotos=False) & me.Q(uploading=False) & me.Q(uploaded=False)
-        ).first()
-        if upload_candidate:
-            message = f"Upload candidate: {upload_candidate.src_path}"
-            print(message)
-            self.status(message)
-            tries = upload_candidate.upload_tries + 1
-            upload_candidate.modify(uploading=True)
-            success, elapsed = upload_to_gphotos(upload_candidate.src_path)
-            if success:
-                upload_candidate.modify(
-                    uploading=False,
-                    uploaded=True,
-                    upload_tries=tries,
-                    upload_elapsed=elapsed,
-                )
-            else:
-                upload_candidate.modify(
-                    uploading=False,
-                    uploaded=False,
-                    upload_tries=tries,
-                    upload_elapsed=elapsed,
-                )
+    # # noinspection PyMethodMayBeStatic
+    # def upload_missing_media(self):
+    #     if not self.state.upload_ok:
+    #         return
+    #     upload_candidate = Queue.objects(
+    #         me.Q(in_gphotos=False) & me.Q(uploading=False) & me.Q(uploaded=False)
+    #     ).first()
+    #     if upload_candidate:
+    #         message = f"Upload candidate: {upload_candidate.src_path}"
+    #         print(message)
+    #         self.status(message)
+    #         tries = upload_candidate.upload_tries + 1
+    #         upload_candidate.modify(uploading=True)
+    #         success, elapsed = upload_to_gphotos(upload_candidate.src_path)
+    #         if success:
+    #             upload_candidate.modify(
+    #                 uploading=False,
+    #                 uploaded=True,
+    #                 upload_tries=tries,
+    #                 upload_elapsed=elapsed,
+    #             )
+    #         else:
+    #             upload_candidate.modify(
+    #                 uploading=False,
+    #                 uploaded=False,
+    #                 upload_tries=tries,
+    #                 upload_elapsed=elapsed,
+    #             )
 
     def mirror_file(self, photo):
         dest = Path(cfg.local.mirror_root, *photo.gphotos_path, photo.original_filename)
@@ -207,7 +233,9 @@ class QueueWorker:
             for photo in Queue.objects(me.Q(in_gphotos=True) & me.Q(mirrored=False)):
                 self.mirror_file(photo)
         if self.state.purge_ok:
-            for photo in Queue.objects(me.Q(in_gphotos=True) & me.Q(purged=False) & me.Q(mirrored=True)):
+            for photo in Queue.objects(
+                me.Q(in_gphotos=True) & me.Q(purged=False) & me.Q(mirrored=True)
+            ):
                 if photo.src_path and os.path.isfile(photo.src_path):
                     logger.info(f"Purge: {photo.src_path}")
                     os.remove(photo.src_path)
