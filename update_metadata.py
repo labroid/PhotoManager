@@ -10,7 +10,7 @@ from utils import config, file_md5sum
 PARSED_EXIF = 'parsed_exif'
 
 cfg = config()
-logger.add("update_metadata.log", rotation="1 MB")
+logger.add("update_metadata.log", rotation="100 MB")
 DbConnect()
 
 
