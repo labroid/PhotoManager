@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import List
 
 from loguru import logger
+import arrow
 
 from me_models import DbConnect, Queue
 from utils import config
@@ -25,7 +26,8 @@ def add_candidates(dirlist: List[str]):
                 Queue(
                     src_path=str(path),
                     src_filename=str(path.name),
-                    size=path.stat().st_size,
+                    size=path.stat().st_size,  # TODO: Add modified time
+                    modifiedTime=arrow.get(path.stat().st_mtime).datetime
                 ).save()
             else:
                 excluded.update([ext.replace(".", "")])
