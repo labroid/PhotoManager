@@ -26,7 +26,7 @@ def add_candidates(dirlist: List[str]):
                 Queue(
                     src_path=str(path),
                     src_filename=str(path.name),
-                    size=path.stat().st_size,  # TODO: Add modified time
+                    size=path.stat().st_size,
                     modifiedTime=arrow.get(path.stat().st_mtime).datetime
                 ).save()
             else:
